@@ -983,6 +983,10 @@ def reset_monitor_filters():
     ] = []
 
     st.session_state[
+        "mro_filter_v13"
+    ] = "All"
+
+    st.session_state[
         "engine_type_filter_v13"
     ] = "All"
 
@@ -1443,12 +1447,13 @@ def monitoring_view():
         unsafe_allow_html=True,
     )
 
-    f1, f2, f3, f4, f5, f6 = (
+    f1, f2, f3, f4, f5, f6, f7 = (
         st.columns(
             [
                 1.05,
                 1.15,
-                .95,
+                .85,
+                .85,
                 1.35,
                 .95,
                 .45,
@@ -1540,6 +1545,17 @@ def monitoring_view():
     )
     progress_options = [OFF_WING_PROGRESS] + source_progress_options
 
+    mro_options = (
+        ["All"]
+        + sorted(
+            str(value)
+            for value in df[
+                "MRO"
+            ].dropna().unique()
+            if str(value).strip()
+        )
+    )
+
     engine_types = (
         ["All"]
         + sorted(
@@ -1571,13 +1587,20 @@ def monitoring_view():
         )
 
     with f3:
+        mro = st.selectbox(
+            "MRO",
+            mro_options,
+            key="mro_filter_v13",
+        )
+
+    with f4:
         engine_type = st.selectbox(
             "Engine type",
             engine_types,
             key="engine_type_filter_v13",
         )
 
-    with f4:
+    with f5:
         scope_filter = st.selectbox(
             "Scope of work",
             scope_options,
@@ -1585,7 +1608,7 @@ def monitoring_view():
             help="Exact Scope of work value from the Google Sheet / Excel source.",
         )
 
-    with f5:
+    with f6:
         esn_search = st.text_input(
             "Search ESN",
             placeholder=(
@@ -1594,7 +1617,7 @@ def monitoring_view():
             key="esn_filter_v13",
         )
 
-    with f6:
+    with f7:
         st.write("")
         st.write("")
 
@@ -1626,10 +1649,7 @@ def monitoring_view():
                 == phase
             ]
         )
-    elif not progress_filter:
-        # Default Monitoring view remains Active-only. When the user explicitly
-        # selects a Progress value, search the full historical dataset so values
-        # such as Completed can be reviewed as requested.
+    else:
         monitor_view = (
             monitor_view[
                 monitor_view[
@@ -1662,6 +1682,16 @@ def monitoring_view():
             progress_mask |= progress_text.isin(exact_progress)
 
         monitor_view = monitor_view[progress_mask]
+
+    if mro != "All":
+        monitor_view = (
+            monitor_view[
+                monitor_view[
+                    "MRO"
+                ].astype(str)
+                == mro
+            ]
+        )
 
     if engine_type != "All":
         monitor_view = (
@@ -2407,16 +2437,6 @@ def mro_view():
 
     real_mro_mask = ~mro_text.str.lower().isin(excluded_mro_labels)
 
-    completed_base = df[
-        (df["Status"] == "Completed")
-        & df["TAT valid"]
-        & real_mro_mask
-    ].copy()
-
-    if completed_base.empty:
-        st.info("No valid completed MRO records available.")
-        return
-
     # --------------------------------------------------------
     # PRIMARY FILTERS
     # --------------------------------------------------------
@@ -2428,14 +2448,55 @@ def mro_view():
         '''
         <div class="section-note">
         MRO TAT and cost should only be compared for the same Scope of Work.
-        Start with Engine Type / Release Year, keep MRO = All for cross-MRO comparison or select one MRO to focus,
-        then choose one specific scope for an apples-to-apples analysis.
+        Start with Engine Type / Year, then select one specific scope for an apples-to-apples comparison.
         </div>
         ''',
         unsafe_allow_html=True,
     )
 
-    f1, f2, f3 = st.columns(3)
+
+    # --------------------------------------------------------
+    # DIRECT MRO SELECTOR + ENGINE DETAIL (MRO PERFORMANCE TAB)
+    # Independent from the comparison filters and completed-only population.
+    # --------------------------------------------------------
+    mro_detail_options = ["All"] + sorted(
+        mro_text.loc[real_mro_mask].unique().tolist(),
+        key=str.casefold,
+    )
+
+    selected_mro_detail = st.selectbox(
+        "MRO",
+        mro_detail_options,
+        key="mro_performance_direct_detail_v535",
+        help="Choose an MRO to display its ESN, Scope of Work and TAT history below.",
+    )
+
+    if selected_mro_detail != "All":
+        mro_detail = df.loc[
+            real_mro_mask & mro_text.eq(selected_mro_detail),
+            ["ESN", "Scope of work", "TAT", "TAT valid"],
+        ].copy()
+        mro_detail = mro_detail.sort_values(
+            ["TAT", "ESN"],
+            ascending=[False, True],
+            na_position="last",
+        )
+        mro_detail = table_view(mro_detail)[["ESN", "Scope of work", "TAT"]]
+        mro_detail = mro_detail.rename(columns={"Scope of work": "Scope of Work"})
+        st.dataframe(mro_detail, hide_index=True, use_container_width=True)
+
+
+    completed_base = df[
+        (df["Status"] == "Completed")
+        & df["TAT valid"]
+        & real_mro_mask
+    ].copy()
+
+    if completed_base.empty:
+        st.info("No valid completed MRO records available.")
+        return
+
+    f1, f2 = st.columns(2)
 
     engine_types = ["All"] + sorted(
         str(v) for v in completed_base["engine type"].dropna().unique()
@@ -2461,41 +2522,20 @@ def mro_view():
             key="mro_year_v16",
         )
 
-    # Build the MRO list after Engine Type / Release Year so the selector only
-    # shows facilities that actually exist in the currently selected population.
-    mro_base = completed_base.copy()
+    filtered_base = completed_base.copy()
+
     if selected_type != "All":
-        mro_base = mro_base[
-            mro_base["engine type"].astype(str) == selected_type
-        ]
-    if selected_year != "All":
-        mro_base = mro_base[
-            mro_base["Release Year"] == int(selected_year)
-        ]
-
-    mro_options = ["All"] + sorted(
-        str(v) for v in mro_base["MRO"].dropna().unique()
-        if str(v).strip()
-    )
-    if st.session_state.get("mro_perf_filter_v17", "All") not in mro_options:
-        st.session_state["mro_perf_filter_v17"] = "All"
-
-    with f3:
-        selected_mro = st.selectbox(
-            "MRO",
-            mro_options,
-            key="mro_perf_filter_v17",
-            help="Focus the MRO Performance page on one MRO, or keep All for cross-MRO comparison.",
-        )
-
-    filtered_base = mro_base.copy()
-    if selected_mro != "All":
         filtered_base = filtered_base[
-            filtered_base["MRO"].astype(str) == selected_mro
+            filtered_base["engine type"].astype(str) == selected_type
+        ]
+
+    if selected_year != "All":
+        filtered_base = filtered_base[
+            filtered_base["Release Year"] == int(selected_year)
         ]
 
     if filtered_base.empty:
-        st.info("No completed records match Engine Type / Release Year / MRO filters.")
+        st.info("No completed records match Engine Type / Year filters.")
         return
 
     # --------------------------------------------------------
@@ -2694,11 +2734,6 @@ def mro_view():
             active_now_df["engine type"].astype(str) == selected_type
         ]
 
-    if selected_mro != "All":
-        active_now_df = active_now_df[
-            active_now_df["MRO"].astype(str) == selected_mro
-        ]
-
     active_now = active_now_df.groupby("MRO").size().rename("Active_Now")
 
     score = (
@@ -2733,12 +2768,7 @@ def mro_view():
     cost_records_total = int(completed["SV cost"].notna().sum())
     comparable_mros = int((score["Completed"] >= 3).sum())
 
-    if selected_mro == "All":
-        st.success(f"Like-for-like comparison active: {selected_scope}")
-    else:
-        st.success(
-            f"MRO focus active: {selected_mro} · Like-for-like scope: {selected_scope}"
-        )
+    st.success(f"Like-for-like comparison active: {selected_scope}")
 
     s1, s2, s3, s4 = st.columns(4)
     s1.metric("Completed SV", f"{len(completed):,}")
