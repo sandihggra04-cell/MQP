@@ -34,7 +34,7 @@ DEFAULT_FIXED_SOURCES = {
         "mode": "drive_xlsx",
     },
     "apu_shop_visit": {
-        "name": "DATA APU SHOP VISIT (2).xlsx",
+        "name": "DATA APU SHOP VISIT.xlsx",
         "url": "https://docs.google.com/spreadsheets/d/12aqNtB0XHDnIvby_yHqRb4BgC2sH1wpQ/edit?usp=drivesdk&ouid=100771707533387912207&rtpof=true&sd=true",
         "mode": "drive_xlsx",
     },
