@@ -250,16 +250,27 @@ def clean_data(raw, phases, max_tat=2000):
     out["Status"] = "Active"
     out.loc[out["Phase"].eq("Completed"), "Status"] = "Completed"
 
+    # A source TAT over the existing plausibility limit is a non-final /
+    # anomalous Excel value. Check the preserved source value as well as the
+    # calculated TAT, so a date-based recalculation cannot silently admit an
+    # anomalous source record into historical Median/P75 statistics.
+    # Keep the entire ESN record available for monitoring.
+    source_tat_pending = out["Source TAT"].gt(max_tat).fillna(False)
+    missing_tat_pending = out["Source TAT"].isna() & out["TAT"].isna()
+    out["TAT pending"] = source_tat_pending | missing_tat_pending
+
     out["TAT valid"] = (
         out["TAT"].notna()
         & out["TAT"].ge(0)
         & out["TAT"].le(max_tat)
+        & ~out["TAT pending"]
     )
 
     out["TAT issue"] = ""
     out.loc[out["TAT"].isna(), "TAT issue"] = "Missing TAT / Induction Date"
     out.loc[out["TAT"].lt(0), "TAT issue"] = "Negative TAT"
     out.loc[out["TAT"].gt(max_tat), "TAT issue"] = "Implausible TAT — check dates"
+    out.loc[out["TAT pending"], "TAT issue"] = "Pending TAT"
 
     out["Release Year"] = out["Release date"].dt.year
     out["Release Quarter Period"] = out["Release date"].dt.to_period("Q")

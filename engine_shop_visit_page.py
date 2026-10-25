@@ -888,25 +888,24 @@ def table_view(frame):
         if "TAT valid" in out.columns:
             out["TAT"] = out.apply(
                 lambda row: (
-                    "Check data"
-                    if not bool(
-                        row["TAT valid"]
-                    )
+                    "Pending TAT"
+                    if row.get("TAT issue", "") == "Pending TAT"
                     else (
-                        "—"
-                        if pd.isna(
-                            row["TAT"]
+                        "Check data"
+                        if not bool(row["TAT valid"])
+                        else (
+                            "—"
+                            if pd.isna(row["TAT"])
+                            else f"{row['TAT']:,.0f}"
                         )
-                        else f"{row['TAT']:,.0f}"
                     )
                 ),
                 axis=1,
             )
 
             out = out.drop(
-                columns=[
-                    "TAT valid"
-                ]
+                columns=["TAT valid", "TAT issue"],
+                errors="ignore",
             )
 
         else:
@@ -1658,176 +1657,170 @@ def monitoring_view():
         unsafe_allow_html=True,
     )
 
-    c1, c2 = (
-        st.columns(2)
+    phase_source = (
+        monitor_view
+        .groupby("Phase")
+        .size()
+        .reset_index(
+            name="Engines"
+        )
     )
 
-    with c1:
-        phase_source = (
-            monitor_view
-            .groupby("Phase")
-            .size()
-            .reset_index(
-                name="Engines"
-            )
+    if (
+        phase_source.empty
+    ):
+        st.info(
+            "No phase data."
         )
 
-        if (
-            phase_source.empty
-        ):
-            st.info(
-                "No phase data."
-            )
+    else:
+        fig = px.bar(
+            phase_source,
+            x="Phase",
+            y="Engines",
+            text="Engines",
+            title=(
+                "Portfolio by phase"
+            ),
+        )
 
-        else:
-            fig = px.bar(
-                phase_source,
-                x="Phase",
-                y="Engines",
-                text="Engines",
-                title=(
-                    "Portfolio by phase"
-                ),
-            )
+        fig.update_traces(
+            textposition="outside"
+        )
 
-            fig.update_traces(
-                textposition="outside"
-            )
+        st.plotly_chart(
+            chart_style(
+                fig,
+                345,
+            ),
+            use_container_width=True,
+            config=PLOT_CONFIG,
+        )
 
-            st.plotly_chart(
-                chart_style(
-                    fig,
-                    345,
-                ),
-                use_container_width=True,
-                config=PLOT_CONFIG,
+    tat_source = (
+        monitor_view[
+            (
+                monitor_view[
+                    "Status"
+                ]
+                == "Active"
             )
+            & monitor_view[
+                "TAT valid"
+            ]
+        ]
+        .copy()
+    )
 
-    with c2:
-        tat_source = (
-            monitor_view[
-                (
-                    monitor_view[
-                        "Status"
-                    ]
-                    == "Active"
-                )
-                & monitor_view[
+    invalid_count = int(
+        (
+            (
+                monitor_view[
+                    "Status"
+                ]
+                == "Active"
+            )
+            & (
+                ~monitor_view[
                     "TAT valid"
                 ]
-            ]
+            )
+        ).sum()
+    )
+
+    if (
+        tat_source.empty
+    ):
+        st.info(
+            "No valid active TAT records."
+        )
+
+    else:
+        watch = (
+            tat_source
+            .sort_values(
+                "TAT",
+                ascending=False,
+            )
+            .head(10)
+            .sort_values(
+                "TAT"
+            )
             .copy()
         )
 
-        invalid_count = int(
-            (
-                (
-                    monitor_view[
-                        "Status"
-                    ]
-                    == "Active"
+        watch[
+            "Engine"
+        ] = watch.apply(
+            lambda row: (
+                f"{row['ESN']} · {row['MRO']}"
+                if str(
+                    row["MRO"]
+                ).strip()
+                else str(
+                    row["ESN"]
                 )
-                & (
-                    ~monitor_view[
-                        "TAT valid"
-                    ]
-                )
-            ).sum()
+            ),
+            axis=1,
         )
 
-        if (
-            tat_source.empty
-        ):
-            st.info(
-                "No valid active TAT records."
-            )
+        fig = px.bar(
+            watch,
+            x="TAT",
+            y="Engine",
+            orientation="h",
+            text="TAT",
+            color="Flag",
+            custom_data=[
+                "ESN",
+                "MRO",
+                "Phase",
+                "Engine Owner",
+                "Key Issue",
+            ],
+            title=(
+                "Active TAT watchlist"
+            ),
+        )
 
-        else:
-            watch = (
-                tat_source
-                .sort_values(
-                    "TAT",
-                    ascending=False,
-                )
-                .head(10)
-                .sort_values(
-                    "TAT"
-                )
-                .copy()
-            )
+        fig.update_traces(
+            texttemplate=(
+                "%{text:.0f}d"
+            ),
+            textposition="outside",
+            hovertemplate=(
+                "<b>ESN %{customdata[0]}</b><br>"
+                "TAT: %{x:.0f} days<br>"
+                "MRO: %{customdata[1]}<br>"
+                "Phase: %{customdata[2]}<br>"
+                "Owner: %{customdata[3]}<br>"
+                "Issue: %{customdata[4]}"
+                "<extra></extra>"
+            ),
+        )
 
-            watch[
-                "Engine"
-            ] = watch.apply(
-                lambda row: (
-                    f"{row['ESN']} · {row['MRO']}"
-                    if str(
-                        row["MRO"]
-                    ).strip()
-                    else str(
-                        row["ESN"]
-                    )
-                ),
-                axis=1,
-            )
+        fig.update_yaxes(
+            type="category",
+            title="Engine",
+        )
 
-            fig = px.bar(
-                watch,
-                x="TAT",
-                y="Engine",
-                orientation="h",
-                text="TAT",
-                color="Flag",
-                custom_data=[
-                    "ESN",
-                    "MRO",
-                    "Phase",
-                    "Engine Owner",
-                    "Key Issue",
-                ],
-                title=(
-                    "Active TAT watchlist"
-                ),
-            )
+        fig.update_xaxes(
+            title="TAT (days)"
+        )
 
-            fig.update_traces(
-                texttemplate=(
-                    "%{text:.0f}d"
-                ),
-                textposition="outside",
-                hovertemplate=(
-                    "<b>ESN %{customdata[0]}</b><br>"
-                    "TAT: %{x:.0f} days<br>"
-                    "MRO: %{customdata[1]}<br>"
-                    "Phase: %{customdata[2]}<br>"
-                    "Owner: %{customdata[3]}<br>"
-                    "Issue: %{customdata[4]}"
-                    "<extra></extra>"
-                ),
-            )
+        st.plotly_chart(
+            chart_style(
+                fig,
+                345,
+            ),
+            use_container_width=True,
+            config=PLOT_CONFIG,
+        )
 
-            fig.update_yaxes(
-                type="category",
-                title="Engine",
+        if invalid_count:
+            st.caption(
+                f"{invalid_count} invalid / implausible TAT record(s) excluded."
             )
-
-            fig.update_xaxes(
-                title="TAT (days)"
-            )
-
-            st.plotly_chart(
-                chart_style(
-                    fig,
-                    345,
-                ),
-                use_container_width=True,
-                config=PLOT_CONFIG,
-            )
-
-            if invalid_count:
-                st.caption(
-                    f"{invalid_count} invalid / implausible TAT record(s) excluded."
-                )
 
     # --------------------------------------------------------
     # TABLE SEARCH
@@ -1908,6 +1901,7 @@ def monitoring_view():
         "TAT",
         "Induction Date",
         "TAT valid",
+        "TAT issue",
         "Forecast Release Date",
         "Flag",
         "Key Issue",
@@ -2077,18 +2071,16 @@ def monitoring_view():
         )
 
         tat_text = (
-            "Check data"
-            if not bool(
-                row[
-                    "TAT valid"
-                ]
-            )
+            "Pending TAT"
+            if row["TAT issue"] == "Pending TAT"
             else (
-                f"{row['TAT']:.0f} days"
-                if pd.notna(
-                    row["TAT"]
+                "Check data"
+                if not bool(row["TAT valid"])
+                else (
+                    f"{row['TAT']:.0f} days"
+                    if pd.notna(row["TAT"])
+                    else "—"
                 )
-                else "—"
             )
         )
 
@@ -2227,6 +2219,7 @@ def monitoring_view():
                 "Phase",
                 "TAT",
                 "TAT valid",
+                "TAT issue",
                 "SV cost",
             ]
 
@@ -2313,7 +2306,7 @@ def mro_view():
     if selected_mro_detail != "All":
         mro_detail = df.loc[
             real_mro_mask & mro_text.eq(selected_mro_detail),
-            ["ESN", "Scope of work", "TAT", "TAT valid"],
+            ["ESN", "Scope of work", "TAT", "TAT valid", "TAT issue"],
         ].copy()
         mro_detail = mro_detail.sort_values(
             ["TAT", "ESN"],
