@@ -210,6 +210,18 @@ def clean_data(raw, phases, max_tat=2000):
     ]:
         out[col] = pd.to_datetime(out[col], errors="coerce", format="mixed")
 
+    # Forecast dates may arrive as Excel numeric serials in exported workbooks.
+    # Normalize only this field; other date/TAT rules remain unchanged.
+    forecast_src = _first(raw, ALIASES["Forecast Release Date"])
+    if forecast_src is not None:
+        forecast_serial = pd.to_numeric(raw.loc[out.index, forecast_src], errors="coerce")
+        serial_mask = forecast_serial.between(20000, 80000)
+        if serial_mask.any():
+            out.loc[serial_mask, "Forecast Release Date"] = pd.to_datetime(
+                forecast_serial.loc[serial_mask], unit="D",
+                origin="1899-12-30", errors="coerce",
+            )
+
     for col in ["TAT", "TSN", "CSN", "SV cost"]:
         out[col] = _num(out[col])
 

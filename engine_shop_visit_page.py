@@ -1002,10 +1002,6 @@ def reset_monitor_filters():
         "monitor_period_v455"
     ] = "All History"
 
-    st.session_state[
-        "monitor_date_basis_v455"
-    ] = "Induction Date"
-
     st.session_state.pop(
         "monitor_custom_range_v455",
         None,
@@ -1339,7 +1335,7 @@ def monitoring_view():
         unsafe_allow_html=True,
     )
 
-    p1, p2, p3 = st.columns([1.0, 1.05, 1.95])
+    p1, p3 = st.columns([1.0, 3.0])
 
     with p1:
         period_choice = st.selectbox(
@@ -1355,23 +1351,8 @@ def monitoring_view():
             help="This period filter applies to the Monitoring KPIs, charts and engine table.",
         )
 
-    date_basis_labels = {
-        "Induction Date": "Induction Date",
-        "removal date": "Removal Date",
-        "Release date": "Release Date",
-    }
-
-    with p2:
-        date_basis = st.selectbox(
-            "Date basis",
-            list(date_basis_labels.keys()),
-            format_func=lambda value: date_basis_labels[value],
-            key="monitor_date_basis_v455",
-            help=(
-                "Induction Date is recommended for shop-visit monitoring because it represents "
-                "the start of TAT. Release Date is useful for completed-shop-visit history."
-            ),
-        )
+    # Date basis selector removed: monitoring period consistently uses Induction Date.
+    date_basis = "Induction Date"
 
     date_series = pd.to_datetime(
         df[date_basis],
@@ -1419,7 +1400,7 @@ def monitoring_view():
                 )
     else:
         with p3:
-            st.warning(f"No valid {date_basis_labels[date_basis]} values found in the source.")
+            st.warning("No valid Induction Date values found in the source.")
 
     if period_start is not None and period_end is not None:
         if period_start > period_end:
@@ -1428,11 +1409,11 @@ def monitoring_view():
         df = df.loc[date_mask].copy()
         st.caption(
             f"Monitoring period: **{period_start:%d %b %Y} → {period_end:%d %b %Y}** "
-            f"based on **{date_basis_labels[date_basis]}** · {len(df):,} source record(s) in period"
+            f"based on **Induction Date** · {len(df):,} source record(s) in period"
         )
     else:
         st.caption(
-            f"Monitoring period: **All History** · date basis: **{date_basis_labels[date_basis]}**"
+            "Monitoring period: **All History** · based on **Induction Date**"
         )
 
     # --------------------------------------------------------
@@ -1934,12 +1915,22 @@ def monitoring_view():
         "SV cost",
     ]
 
+    # Induction Plan: highlight the full row only when Phase is On Hold
+    # and an actual Induction Date is provided in the source workbook.
+    display_table = table_view(table_df[table_cols])
+
+    def _induction_plan_row_style(row):
+        is_induction_plan = (
+            row["Phase"] == "On Hold"
+            and row["Induction Date"] not in ("—", "")
+        )
+        style = "background-color: #FFF2A8; color: #4B3B05" if is_induction_plan else ""
+        return [style] * len(row)
+
+    st.caption("🟨 **Induction Plan** — On Hold with an Induction Date")
+
     event = st.dataframe(
-        table_view(
-            table_df[
-                table_cols
-            ]
-        ),
+        display_table.style.apply(_induction_plan_row_style, axis=1),
         hide_index=True,
         use_container_width=True,
         height=min(
