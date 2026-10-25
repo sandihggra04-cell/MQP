@@ -975,10 +975,6 @@ PLOT_CONFIG = {
 
 def reset_monitor_filters():
     st.session_state[
-        "phase_filter_v13"
-    ] = "All"
-
-    st.session_state[
         "progress_filter_v471"
     ] = []
 
@@ -987,8 +983,8 @@ def reset_monitor_filters():
     ] = "All"
 
     st.session_state[
-        "engine_type_filter_v13"
-    ] = "All"
+        "engine_type_filter_v14"
+    ] = []
 
     st.session_state[
         "scope_filter_v15"
@@ -1447,13 +1443,12 @@ def monitoring_view():
         unsafe_allow_html=True,
     )
 
-    f1, f2, f3, f4, f5, f6, f7 = (
+    f1, f2, f3, f4, f5, f6 = (
         st.columns(
             [
-                1.05,
                 1.15,
-                .85,
-                .85,
+                .95,
+                1.15,
                 1.35,
                 .95,
                 .45,
@@ -1461,89 +1456,27 @@ def monitoring_view():
         )
     )
 
-    phase_counts = (
-        df["Phase"]
-        .value_counts(
-            dropna=False
-        )
-        .to_dict()
-    )
-
-    phase_map = {
-        "All": "All"
-    }
-
-    for phase_name in PHASES:
-        count = int(
-            phase_counts.get(
-                phase_name,
-                0,
-            )
-        )
-
-        phase_map[
-            f"{phase_name} ({count})"
-        ] = phase_name
-
-    # Preserve unexpected values in the source.
-    extras = sorted(
-        str(value)
-        for value in df[
-            "Phase"
-        ].dropna().unique()
-        if (
-            str(value).strip()
-            and str(value)
-            not in set(PHASES)
-        )
-    )
-
-    for phase_name in extras:
-        count = int(
-            phase_counts.get(
-                phase_name,
-                0,
-            )
-        )
-
-        phase_map[
-            f"{phase_name} ({count})"
-        ] = phase_name
-
-    if (
-        "phase_filter_v13"
-        not in st.session_state
-    ):
-        st.session_state[
-            "phase_filter_v13"
-        ] = "All"
-
-    with f1:
-        phase_label = st.selectbox(
-            "Phase",
-            list(
-                phase_map.keys()
-            ),
-            key="phase_filter_v13",
-        )
-
-        phase = phase_map[
-            phase_label
-        ]
-
-    # Synthetic operational filter. ``Off Wing`` means every populated
-    # Progress/Progres state except a completed state. Keep the original
-    # source values available as exact filters as well.
     OFF_WING_PROGRESS = "Off Wing"
-    source_progress_options = sorted(
-        str(value)
-        for value in df[
-            "Progres"
-        ].dropna().unique()
-        if str(value).strip()
-        and str(value).strip().casefold() != OFF_WING_PROGRESS.casefold()
-    )
-    progress_options = [OFF_WING_PROGRESS] + source_progress_options
+
+    def normalize_progress_label(value):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        key = text.casefold()
+        if key in {"hold", "on hold"}:
+            return "Hold"
+        if key in {"completed", "complete"}:
+            return "completed"
+        if key in {"in progress", "in-progress", "progress"}:
+            return "in progress"
+        return text
+
+    progress_options = [
+        OFF_WING_PROGRESS,
+        "Hold",
+        "completed",
+        "in progress",
+    ]
 
     mro_options = (
         ["All"]
@@ -1556,15 +1489,12 @@ def monitoring_view():
         )
     )
 
-    engine_types = (
-        ["All"]
-        + sorted(
-            str(value)
-            for value in df[
-                "engine type"
-            ].dropna().unique()
-            if str(value).strip()
-        )
+    engine_type_options = sorted(
+        str(value)
+        for value in df[
+            "engine type"
+        ].dropna().unique()
+        if str(value).strip()
     )
 
     scope_options = (
@@ -1578,29 +1508,33 @@ def monitoring_view():
         )
     )
 
-    with f2:
+    with f1:
         progress_filter = st.multiselect(
             "Progress",
             progress_options,
             key="progress_filter_v471",
-            help="Off Wing = all progress states except Completed. Other options match the exact Progress/Progres value from the source.",
+            help=(
+                "Off Wing = all non-completed progress states. "
+                "Hold, completed, and in progress apply exact progress filtering."
+            ),
         )
 
-    with f3:
+    with f2:
         mro = st.selectbox(
             "MRO",
             mro_options,
             key="mro_filter_v13",
         )
 
-    with f4:
-        engine_type = st.selectbox(
+    with f3:
+        engine_types_selected = st.multiselect(
             "Engine type",
-            engine_types,
-            key="engine_type_filter_v13",
+            engine_type_options,
+            key="engine_type_filter_v14",
+            placeholder="Choose options",
         )
 
-    with f5:
+    with f4:
         scope_filter = st.selectbox(
             "Scope of work",
             scope_options,
@@ -1608,7 +1542,7 @@ def monitoring_view():
             help="Exact Scope of work value from the Google Sheet / Excel source.",
         )
 
-    with f6:
+    with f5:
         esn_search = st.text_input(
             "Search ESN",
             placeholder=(
@@ -1617,7 +1551,7 @@ def monitoring_view():
             key="esn_filter_v13",
         )
 
-    with f7:
+    with f6:
         st.write("")
         st.write("")
 
@@ -1640,48 +1574,33 @@ def monitoring_view():
         df.copy()
     )
 
-    if phase != "All":
-        monitor_view = (
-            monitor_view[
-                monitor_view[
-                    "Phase"
-                ]
-                == phase
-            ]
-        )
-    else:
-        monitor_view = (
-            monitor_view[
-                monitor_view[
-                    "Status"
-                ]
-                == "Active"
-            ]
-        )
+    progress_text = (
+        monitor_view["Progres"]
+        .astype("string")
+        .fillna("")
+        .str.strip()
+    )
+    progress_norm = progress_text.apply(normalize_progress_label)
 
-    if progress_filter:
-        selected_progress = set(progress_filter)
-        progress_text = (
-            monitor_view["Progres"]
-            .astype("string")
-            .fillna("")
-            .str.strip()
+    selected_progress = set(progress_filter) if progress_filter else {OFF_WING_PROGRESS}
+    progress_mask = pd.Series(False, index=monitor_view.index)
+
+    if OFF_WING_PROGRESS in selected_progress:
+        progress_mask |= monitor_view["Status"].eq("Active")
+
+    if "Hold" in selected_progress:
+        progress_mask |= monitor_view["Phase"].eq("On Hold")
+
+    if "completed" in selected_progress:
+        progress_mask |= monitor_view["Status"].eq("Completed")
+
+    if "in progress" in selected_progress:
+        progress_mask |= (
+            monitor_view["Status"].eq("Active")
+            & ~monitor_view["Phase"].eq("On Hold")
         )
 
-        progress_mask = pd.Series(False, index=monitor_view.index)
-
-        if OFF_WING_PROGRESS in selected_progress:
-            normalized_progress = progress_text.str.casefold()
-            progress_mask |= (
-                normalized_progress.ne("")
-                & ~normalized_progress.isin({"completed", "complete"})
-            )
-
-        exact_progress = selected_progress - {OFF_WING_PROGRESS}
-        if exact_progress:
-            progress_mask |= progress_text.isin(exact_progress)
-
-        monitor_view = monitor_view[progress_mask]
+    monitor_view = monitor_view[progress_mask]
 
     if mro != "All":
         monitor_view = (
@@ -1693,13 +1612,13 @@ def monitoring_view():
             ]
         )
 
-    if engine_type != "All":
+    if engine_types_selected:
         monitor_view = (
             monitor_view[
                 monitor_view[
                     "engine type"
                 ].astype(str)
-                == engine_type
+                .isin(engine_types_selected)
             ]
         )
 
@@ -1736,8 +1655,8 @@ def monitoring_view():
     # --------------------------------------------------------
     # KPI
     # --------------------------------------------------------
-    k1, k2, k3, k4, k5 = (
-        st.columns(5)
+    k1, k2 = (
+        st.columns(2)
     )
 
     k1.metric(
@@ -1746,23 +1665,8 @@ def monitoring_view():
     )
 
     k2.metric(
-        "Active",
-        f"{int(monitor_view['Status'].eq('Active').sum()):,}",
-    )
-
-    k3.metric(
         "On Hold",
         f"{int(monitor_view['Phase'].eq('On Hold').sum()):,}",
-    )
-
-    k4.metric(
-        "Ready Release",
-        f"{int(monitor_view['Phase'].eq('Ready for Release').sum()):,}",
-    )
-
-    k5.metric(
-        "Need Review",
-        f"{int(monitor_view['Flag'].isin(['Review','Check Data']).sum()):,}",
     )
 
     # --------------------------------------------------------
@@ -1778,103 +1682,45 @@ def monitoring_view():
     )
 
     with c1:
-        if phase == "All":
-            phase_source = (
-                monitor_view
-                .groupby("Phase")
-                .size()
-                .reset_index(
-                    name="Engines"
-                )
+        phase_source = (
+            monitor_view
+            .groupby("Phase")
+            .size()
+            .reset_index(
+                name="Engines"
             )
+        )
 
-            if (
-                phase_source.empty
-            ):
-                st.info(
-                    "No phase data."
-                )
-
-            else:
-                fig = px.bar(
-                    phase_source,
-                    x="Phase",
-                    y="Engines",
-                    text="Engines",
-                    title=(
-                        "Active portfolio by phase"
-                    ),
-                )
-
-                fig.update_traces(
-                    textposition="outside"
-                )
-
-                st.plotly_chart(
-                    chart_style(
-                        fig,
-                        345,
-                    ),
-                    use_container_width=True,
-                    config=PLOT_CONFIG,
-                )
+        if (
+            phase_source.empty
+        ):
+            st.info(
+                "No phase data."
+            )
 
         else:
-            mro_source = (
-                monitor_view[
-                    monitor_view[
-                        "MRO"
-                    ]
-                    .astype("string")
-                    .fillna("")
-                    .str.strip()
-                    .ne("")
-                ]
+            fig = px.bar(
+                phase_source,
+                x="Phase",
+                y="Engines",
+                text="Engines",
+                title=(
+                    "Portfolio by phase"
+                ),
             )
 
-            if (
-                mro_source.empty
-            ):
-                st.info(
-                    "No MRO distribution available."
-                )
+            fig.update_traces(
+                textposition="outside"
+            )
 
-            else:
-                mro_counts = (
-                    mro_source
-                    .groupby("MRO")
-                    .size()
-                    .reset_index(
-                        name="Engines"
-                    )
-                    .sort_values(
-                        "Engines"
-                    )
-                )
-
-                fig = px.bar(
-                    mro_counts,
-                    x="Engines",
-                    y="MRO",
-                    orientation="h",
-                    text="Engines",
-                    title=(
-                        f"{phase} by MRO"
-                    ),
-                )
-
-                fig.update_traces(
-                    textposition="outside"
-                )
-
-                st.plotly_chart(
-                    chart_style(
-                        fig,
-                        345,
-                    ),
-                    use_container_width=True,
-                    config=PLOT_CONFIG,
-                )
+            st.plotly_chart(
+                chart_style(
+                    fig,
+                    345,
+                ),
+                use_container_width=True,
+                config=PLOT_CONFIG,
+            )
 
     with c2:
         tat_source = (
@@ -2079,6 +1925,7 @@ def monitoring_view():
         "Scope of work",
         "Phase",
         "TAT",
+        "Induction Date",
         "TAT valid",
         "Forecast Release Date",
         "Flag",
@@ -2115,6 +1962,7 @@ def monitoring_view():
             ),
             "ESN": st.column_config.TextColumn("ESN", width="small"),
             "MRO": st.column_config.TextColumn("MRO", width="small"),
+            "Induction Date": st.column_config.TextColumn("Induction Date", width="medium"),
         },
     )
 
