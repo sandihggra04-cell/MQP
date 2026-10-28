@@ -6,6 +6,7 @@ from urllib.request import Request, urlopen
 from html import unescape as html_unescape
 from pathlib import Path
 import re
+from textwrap import wrap
 import sys
 import time
 
@@ -2238,6 +2239,31 @@ def monitoring_view():
             )
 
 
+# Categories supplied for Engine Shop Visit MRO Performance.
+# All other populated Scope of Work values are classified as Minor Repair.
+_HEAVY_REPAIR_SCOPES = {
+    "Core+LPT perf rst and LLP replecement",
+    "Module Repair + Performance restoration",
+    "LLP Replacement",
+    "LLP Expired and HPC Liner Loss",
+    "2nd HPTB and 1st Refurbishment",
+}
+_HEAVY_REPAIR_SCOPE_KEYS = {
+    " ".join(value.split()).casefold() for value in _HEAVY_REPAIR_SCOPES
+}
+
+
+def _mro_repair_category(scope):
+    normalized = " ".join(str(scope).split()).casefold()
+    if not normalized or normalized in {"nan", "<na>", "none"}:
+        return ""
+    return (
+        "Heavy Repair"
+        if normalized in _HEAVY_REPAIR_SCOPE_KEYS
+        else "Minor Repair"
+    )
+
+
 # ============================================================
 # MRO PERFORMANCE FRAGMENT
 # ============================================================
@@ -2402,7 +2428,11 @@ def mro_view():
         .sort_values(["Completed_SV", "MRO_Count"], ascending=[False, False])
     )
 
-    scope_label_to_value = {"All scopes — overview only": "__ALL__"}
+    scope_label_to_value = {
+        "All scopes — overview only": "__ALL__",
+        "Heavy Repair — category overview": "__HEAVY__",
+        "Minor Repair — category overview": "__MINOR__",
+    }
     for _, r in scope_stats.iterrows():
         scope_name = str(r["Scope of work"])
         label = (
@@ -2416,11 +2446,39 @@ def mro_view():
         list(scope_label_to_value.keys()),
         key="mro_scope_v16",
         help=(
-            "Select one exact Scope of Work to enable like-for-like MRO TAT / cost comparison. "
-            "All scopes intentionally disables cross-MRO performance ranking."
+            "Choose Heavy Repair or Minor Repair for a grouped workload overview, "
+            "or select one exact Scope of Work for like-for-like MRO TAT / cost comparison. "
+            "Category overviews intentionally exclude cross-MRO performance ranking."
         ),
     )
     selected_scope = scope_label_to_value[scope_label]
+
+    selected_repair_category = {
+        "__HEAVY__": "Heavy Repair",
+        "__MINOR__": "Minor Repair",
+    }.get(selected_scope)
+
+    if selected_repair_category:
+        # Grouped views are descriptive: mixed scopes cannot be ranked fairly.
+        scope_ready = scope_ready.loc[
+            scope_ready["Scope of work"].map(_mro_repair_category)
+            .eq(selected_repair_category)
+        ].copy()
+        if scope_ready.empty:
+            st.info(f"No valid completed shop visits match {selected_repair_category} for the selected filters.")
+            return
+        scope_stats = (
+            scope_ready
+            .groupby("Scope of work")
+            .agg(
+                Completed_SV=("ESN", "count"),
+                MRO_Count=("MRO", "nunique"),
+                Median_TAT=("TAT", "median"),
+            )
+            .reset_index()
+            .sort_values(["Completed_SV", "MRO_Count"], ascending=[False, False])
+        )
+        st.caption(f"Selected repair category: **{selected_repair_category}** · {len(scope_ready):,} completed shop visit(s) with valid TAT")
 
     if missing_scope_n:
         st.caption(
@@ -2428,19 +2486,26 @@ def mro_view():
         )
 
     # --------------------------------------------------------
-    # ALL-SCOPES MODE = CONTEXT ONLY, NO MRO RANKING
+    # ALL-SCOPES / GROUPED REPAIR CATEGORY = CONTEXT ONLY, NO MRO RANKING
     # --------------------------------------------------------
-    if selected_scope == "__ALL__":
+    if selected_scope in {"__ALL__", "__HEAVY__", "__MINOR__"}:
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("Completed SV", f"{len(scope_ready):,}")
         s2.metric("Distinct Scopes", f"{scope_ready['Scope of work'].nunique():,}")
         s3.metric("MROs", f"{scope_ready['MRO'].nunique():,}")
         s4.metric("Portfolio Median TAT", f"{scope_ready['TAT'].median():.0f} d")
 
-        st.info(
-            "Cross-MRO TAT/cost ranking is intentionally hidden while Scope of Work = All. "
-            "Different scopes can have fundamentally different TAT and cost. Select one scope above to compare MROs fairly."
-        )
+        if selected_repair_category:
+            st.info(
+                f"{selected_repair_category} includes multiple Scope of Work values. "
+                "This is a grouped workload overview, not a like-for-like MRO performance ranking. "
+                "Select one individual scope for a fair cross-MRO TAT/cost comparison."
+            )
+        else:
+            st.info(
+                "Cross-MRO TAT/cost ranking is intentionally hidden while Scope of Work = All. "
+                "Different scopes can have fundamentally different TAT and cost. Select one scope above to compare MROs fairly."
+            )
 
         st.markdown(
             '<div class="section-title">Scope mix overview</div>',
@@ -2465,73 +2530,86 @@ def mro_view():
             height=min(520, 80 + 36 * max(len(scope_display), 1)),
         )
 
-        c1, c2 = st.columns(2)
+        top_scope = scope_stats.head(12).sort_values("Completed_SV")
+        fig = px.bar(
+            top_scope,
+            x="Completed_SV",
+            y="Scope of work",
+            orientation="h",
+            text="Completed_SV",
+            title="Completed shop visits by scope",
+            custom_data=["MRO_Count", "Median_TAT"],
+        )
+        fig.update_traces(
+            texttemplate="N=%{text}",
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Completed SV: %{x}<br>"
+                "MROs represented: %{customdata[0]}<br>"
+                "Portfolio median TAT: %{customdata[1]:.0f} d"
+                "<extra></extra>"
+            ),
+        )
+        fig.update_xaxes(title="Completed shop visits")
+        # Wrap long scope labels and reserve margins for labels and N= values.
+        scope_labels = top_scope["Scope of work"].astype(str).tolist()
+        fig.update_yaxes(
+            title="Scope of Work",
+            automargin=True,
+            tickmode="array",
+            tickvals=scope_labels,
+            ticktext=[
+                "<br>".join(wrap(label, width=36, break_long_words=False))
+                or label
+                for label in scope_labels
+            ],
+        )
+        fig = chart_style(fig, max(460, 60 * len(top_scope) + 100))
+        fig.update_layout(margin=dict(l=360, r=115, t=65, b=55))
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config=PLOT_CONFIG,
+        )
 
-        with c1:
-            top_scope = scope_stats.head(12).sort_values("Completed_SV")
-            fig = px.bar(
-                top_scope,
-                x="Completed_SV",
-                y="Scope of work",
-                orientation="h",
-                text="Completed_SV",
-                title="Completed shop visits by scope",
-                custom_data=["MRO_Count", "Median_TAT"],
+        mro_sample = (
+            scope_ready.groupby("MRO")
+            .agg(
+                Completed_SV=("ESN", "count"),
+                Distinct_Scopes=("Scope of work", "nunique"),
             )
-            fig.update_traces(
-                texttemplate="N=%{text}",
-                textposition="outside",
-                hovertemplate=(
-                    "<b>%{y}</b><br>"
-                    "Completed SV: %{x}<br>"
-                    "MROs represented: %{customdata[0]}<br>"
-                    "Portfolio median TAT: %{customdata[1]:.0f} d"
-                    "<extra></extra>"
-                ),
-            )
-            fig.update_xaxes(title="Completed shop visits")
-            fig.update_yaxes(title="Scope of Work")
-            st.plotly_chart(
-                chart_style(fig, 420),
-                use_container_width=True,
-                config=PLOT_CONFIG,
-            )
-
-        with c2:
-            mro_sample = (
-                scope_ready.groupby("MRO")
-                .agg(
-                    Completed_SV=("ESN", "count"),
-                    Distinct_Scopes=("Scope of work", "nunique"),
-                )
-                .reset_index()
-                .sort_values("Completed_SV")
-            )
-            fig = px.bar(
-                mro_sample,
-                x="Completed_SV",
-                y="MRO",
-                orientation="h",
-                text="Completed_SV",
-                title="Historical workload by MRO — context only",
-                custom_data=["Distinct_Scopes"],
-            )
-            fig.update_traces(
-                texttemplate="N=%{text}",
-                textposition="outside",
-                hovertemplate=(
-                    "<b>%{y}</b><br>"
-                    "Completed SV: %{x}<br>"
-                    "Distinct scopes: %{customdata[0]}"
-                    "<extra></extra>"
-                ),
-            )
-            fig.update_xaxes(title="Completed shop visits")
-            st.plotly_chart(
-                chart_style(fig, 420),
-                use_container_width=True,
-                config=PLOT_CONFIG,
-            )
+            .reset_index()
+            .sort_values("Completed_SV")
+        )
+        fig = px.bar(
+            mro_sample,
+            x="Completed_SV",
+            y="MRO",
+            orientation="h",
+            text="Completed_SV",
+            title="Historical workload by MRO — context only",
+            custom_data=["Distinct_Scopes"],
+        )
+        fig.update_traces(
+            texttemplate="N=%{text}",
+            textposition="outside",
+            hovertemplate=(
+                "<b>%{y}</b><br>"
+                "Completed SV: %{x}<br>"
+                "Distinct scopes: %{customdata[0]}"
+                "<extra></extra>"
+            ),
+        )
+        fig.update_xaxes(title="Completed shop visits")
+        fig.update_yaxes(automargin=True)
+        fig = chart_style(fig, max(420, 46 * len(mro_sample) + 100))
+        fig.update_layout(margin=dict(l=160, r=115, t=65, b=55))
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config=PLOT_CONFIG,
+        )
 
         st.caption(
             "This overview describes workload mix only. It is not an MRO performance ranking."
