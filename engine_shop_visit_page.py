@@ -2330,18 +2330,75 @@ def mro_view():
     )
 
     if selected_mro_detail != "All":
+        # Detail summary scoped to the selected MRO only. This block is
+        # independent of the cross-MRO analysis filters further down.
+        selected_detail_category = st.selectbox(
+            "Scope of Work Category",
+            ["Heavy Repair", "Minor Repair"],
+            key="mro_performance_detail_category_v536",
+            help="Heavy Repair contains the five specified workscopes; all other populated workscopes are Minor Repair.",
+        )
+
+        st.info(
+            "**Heavy Repair includes:** Core+LPT perf rst and LLP replecement; "
+            "Module Repair + Performance restoration; LLP Replacement; "
+            "LLP Expired and HPC Liner Loss; 2nd HPTB and 1st Refurbishment. "
+            "All other populated Scope of Work values are grouped as Minor Repair."
+        )
+
         mro_detail = df.loc[
-            real_mro_mask & mro_text.eq(selected_mro_detail),
-            ["ESN", "Scope of work", "TAT", "TAT valid", "TAT issue"],
+            real_mro_mask & mro_text.eq(selected_mro_detail)
         ].copy()
+        mro_detail = mro_detail.loc[
+            mro_detail["Scope of work"]
+            .map(_mro_repair_category)
+            .eq(selected_detail_category)
+        ].copy()
+
+        # Count all shop-visit records in the MRO/category (including active).
+        # Historical MRO median uses only completed SVs with validated TAT.
+        median_population = mro_detail.loc[
+            mro_detail["Status"].eq("Completed")
+            & mro_detail["TAT valid"].fillna(False),
+            "TAT",
+        ].dropna()
+        median_tat = median_population.median()
+        median_label = (
+            f"{median_tat:,.0f} d"
+            if pd.notna(median_tat) and float(median_tat).is_integer()
+            else f"{median_tat:,.1f} d"
+            if pd.notna(median_tat)
+            else "—"
+        )
+
+        k1, k2 = st.columns(2)
+        k1.metric(f"{selected_detail_category} Records", f"{len(mro_detail):,}")
+        k2.metric(
+            "Median TAT",
+            median_label,
+            help="Median TAT from completed shop visits with valid TAT, excluding pending/anomalous values.",
+        )
         mro_detail = mro_detail.sort_values(
             ["TAT", "ESN"],
             ascending=[False, True],
             na_position="last",
         )
-        mro_detail = table_view(mro_detail)[["ESN", "Scope of work", "TAT"]]
-        mro_detail = mro_detail.rename(columns={"Scope of work": "Scope of Work"})
-        st.dataframe(mro_detail, hide_index=True, use_container_width=True)
+        detail_columns = ["ESN", "Scope of work", "TAT", "TAT valid", "TAT issue"]
+        mro_detail_display = table_view(mro_detail[detail_columns])[
+            ["ESN", "Scope of work", "TAT"]
+        ].rename(columns={"Scope of work": "Scope of Work"})
+        st.dataframe(
+            mro_detail_display,
+            hide_index=True,
+            use_container_width=True,
+            height=min(600, 80 + 36 * max(len(mro_detail_display), 1)),
+        )
+        st.caption(
+            "Record count includes Active and Completed visits. "
+            f"Median TAT uses {len(median_population):,} Completed record(s) "
+            "with valid TAT only; pending/anomalous TAT is excluded."
+        )
+
 
 
     completed_base = df[
