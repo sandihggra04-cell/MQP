@@ -1698,35 +1698,19 @@ def monitoring_view():
             config=PLOT_CONFIG,
         )
 
-    tat_source = (
-        monitor_view[
-            (
-                monitor_view[
-                    "Status"
-                ]
-                == "Active"
-            )
-            & monitor_view[
-                "TAT valid"
-            ]
-        ]
-        .copy()
+    # Display all ongoing In Progress / On Hold engines with a valid TAT.
+    # Do not limit the chart to the ten longest shop visits.
+    ongoing_mask = (
+        monitor_view["Status"].eq("Active")
+        & monitor_view["Phase"].astype("string").str.strip().str.casefold()
+          .isin(["in progress", "on hold"])
     )
+    tat_source = monitor_view[
+        ongoing_mask & monitor_view["TAT valid"].fillna(False)
+    ].copy()
 
     invalid_count = int(
-        (
-            (
-                monitor_view[
-                    "Status"
-                ]
-                == "Active"
-            )
-            & (
-                ~monitor_view[
-                    "TAT valid"
-                ]
-            )
-        ).sum()
+        (ongoing_mask & ~monitor_view["TAT valid"].fillna(False)).sum()
     )
 
     if (
@@ -1739,14 +1723,7 @@ def monitoring_view():
     else:
         watch = (
             tat_source
-            .sort_values(
-                "TAT",
-                ascending=False,
-            )
-            .head(10)
-            .sort_values(
-                "TAT"
-            )
+            .sort_values("TAT")
             .copy()
         )
 
@@ -1812,7 +1789,7 @@ def monitoring_view():
         st.plotly_chart(
             chart_style(
                 fig,
-                345,
+                max(345, 95 + 34 * len(watch)),
             ),
             use_container_width=True,
             config=PLOT_CONFIG,
